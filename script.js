@@ -80,6 +80,21 @@ function containsKeyword(text, keywords) {
     return keywords.some(keyword => text.includes(keyword));
 }
 
+function extractCityFromText(text) {
+    const patterns = [
+        /pogoda(?:\s+na)?\s+(?:w|dla)\s+([a-ząćęłńóśżźA-ZĄĆĘŁŃÓŚŻŹ\s\-]+)/i,
+        /(?:jak jest|jaka jest|pogoda)\s+(?:w|na|dla)\s+([a-ząćęłńóśżźA-ZĄĆĘŁŃÓŚŻŹ\s\-]+)/i,
+        /\b(?:w|dla)\s+([a-ząćęłńóśżźA-ZĄĆĘŁŃÓŚŻŹ\s\-]+)$/i
+    ];
+    for (const regex of patterns) {
+        const match = text.match(regex);
+        if (match && match[1]) {
+            return match[1].trim();
+        }
+    }
+    return null;
+}
+
 function buildRecommendation(temp, conditions, styles) {
     const pieces = [];
 
@@ -149,8 +164,10 @@ function botResponse(rawText) {
         return 'Cześć! Napisz, jaka jest temperatura i warunki pogodowe, a doradzę strój.';
     }
 
-    if (containsKeyword(lowerText, ['pogoda w', 'proszę o pogodę', 'pogoda dla', 'sprawdź pogodę', 'openweather'])) {
-        return 'Na razie analizuję informację bez API. Opisz pogodę tekstowo, np. „Jest 7 stopni i pada deszcz”.';
+    if (containsKeyword(lowerText, ['pogoda w', 'proszę o pogodę', 'pogoda dla', 'sprawdź pogodę', 'openweather', 'czy będzie', 'czy dzisiaj', 'czy będzie dzisiaj'])) {
+        if (!extractCityFromText(lowerText) && !temperature) {
+            return 'Aby sprawdzić pogodę, wpisz miasto w polu powyżej lub napisz np. "pogoda w Warszawie".';
+        }
     }
 
     const recommendation = buildRecommendation(temperature, conditions, styles);
@@ -215,6 +232,11 @@ function sendMessage() {
 
     setTimeout(() => {
         status.remove();
+        const weatherCity = extractCityFromText(text);
+        if (weatherCity) {
+            handleFetchWeatherFromText(weatherCity, text);
+            return;
+        }
         const response = botResponse(text);
         addMessage(response, 'bot-message');
         saveHistory();
@@ -248,45 +270,40 @@ async function handleFetchWeather() {
         addStatus('Wpisz nazwę miasta, np. Warszawa.');
         return;
     }
+    await fetchWeatherByCity(city);
+}
 
-    let key = loadOpenWeatherKey();
-    const status = addStatus(`Pobieram pogodę dla ${city}...`);
-    let data;
-
+async function handleFetchWeatherFromText(city, originalText) {
+    const status = addStatus(`Sprawdzam pogodę dla ${city}...`);
     try {
-        data = await fetchWeather(city, key);
+        const data = await fetchWeatherByCity(city);
+        status.remove();
+        addStatus(`Pobrano: ${Math.round(data.main.temp)}°C, ${data.weather[0].description}`);
+        const text = `Jest ${Math.round(data.main.temp)} stopni i ${data.weather[0].description}`;
+        const response = botResponse(text);
+        addMessage(response, 'bot-message');
+        saveHistory();
+    } catch (err) {
+        status.remove();
+        addStatus('Błąd pobierania pogody: ' + err.message);
+    }
+}
+
+async function fetchWeatherByCity(city) {
+    let key = loadOpenWeatherKey();
+    try {
+        return await fetchWeather(city, key);
     } catch (err) {
         if (err.message.toLowerCase().includes('invalid api key')) {
             const newKey = requestApiKeyRetry();
             if (!newKey) {
-                status.remove();
-                addStatus('Nie podano poprawnego klucza API. Spróbuj ponownie.');
-                return;
+                throw new Error('Nie podano poprawnego klucza API. Spróbuj ponownie.');
             }
             key = newKey;
-            try {
-                data = await fetchWeather(city, key);
-            } catch (retryErr) {
-                status.remove();
-                addStatus('Błąd pobierania pogody: ' + retryErr.message);
-                return;
-            }
-        } else {
-            status.remove();
-            addStatus('Błąd pobierania pogody: ' + err.message);
-            return;
+            return await fetchWeather(city, key);
         }
+        throw err;
     }
-
-    status.remove();
-    const temp = Math.round(data.main.temp);
-    const desc = data.weather && data.weather[0] && data.weather[0].description ? data.weather[0].description : '';
-    addStatus(`Pobrano: ${temp}°C, ${desc}`);
-
-    const text = `Jest ${temp} stopni i ${desc}`;
-    const response = botResponse(text);
-    addMessage(response, 'bot-message');
-    saveHistory();
 }
 
 window.addEventListener('load', () => {
