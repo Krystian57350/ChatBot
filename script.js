@@ -43,16 +43,6 @@ async function timeoutFetch(resource, options = {}, timeout = 15000) {
     }
 }
 
-function requestApiKeyRetry() {
-    const defaultKey = loadOpenWeatherKey();
-    const newKey = window.prompt('OpenWeather: klucz API jest nieprawidłowy. Wprowadź poprawny klucz API:', defaultKey);
-    if (!newKey) return null;
-    const trimmed = newKey.trim();
-    if (!trimmed) return null;
-    saveOpenWeatherKey(trimmed);
-    return trimmed;
-}
-
 function addMessage(text, sender) {
     const message = document.createElement('div');
     message.classList.add('message', sender);
@@ -77,7 +67,10 @@ function parseTemperature(text) {
 }
 
 function containsKeyword(text, keywords) {
-    return keywords.some(keyword => text.includes(keyword));
+    if (typeof keywords === 'string') {
+        return text.includes(keywords);
+    }
+    return Array.isArray(keywords) && keywords.some(keyword => text.includes(keyword));
 }
 
 function extractCityFromText(text) {
@@ -111,7 +104,7 @@ function buildRecommendation(temp, conditions, styles) {
             pieces.push('Wybierz lekką koszulkę i przewiewne spodnie.');
         }
     } else {
-        pieces.push('Opisz temperaturę lub pogodę dokładniej, bym mógł podpowiedzieć najlepszy strój.');
+        return 'Opisz temperaturę lub pogodę dokładniej, bym mógł podpowiedzieć najlepszy strój.';
     }
 
     if (conditions.rain) {
@@ -168,6 +161,16 @@ function botResponse(rawText) {
         if (!extractCityFromText(lowerText) && !temperature) {
             return 'Aby sprawdzić pogodę, wpisz miasto w polu powyżej lub napisz np. "pogoda w Warszawie".';
         }
+    }
+
+    if (temperature === null && Object.values(conditions).some(Boolean)) {
+        const visibleConditions = [];
+        if (conditions.rain) visibleConditions.push('deszcz');
+        if (conditions.snow) visibleConditions.push('śnieg');
+        if (conditions.windy) visibleConditions.push('wiatr');
+        if (conditions.sunny) visibleConditions.push('słońce');
+        const description = visibleConditions.length ? visibleConditions.join(', ') : 'pogodę';
+        return `Widzę ${description}. Podaj proszę temperaturę lub miasto, aby mogłem doradzić ubiór.`;
     }
 
     const recommendation = buildRecommendation(temperature, conditions, styles);
@@ -243,8 +246,6 @@ function sendMessage() {
     }, 700);
 }
 
-const cityInput = document.getElementById('city-input');
-
 sendButton.addEventListener('click', sendMessage);
 userInput.addEventListener('keydown', event => {
     if (event.key === 'Enter') {
@@ -253,25 +254,7 @@ userInput.addEventListener('keydown', event => {
     }
 });
 
-if (cityInput) {
-    cityInput.addEventListener('keydown', event => {
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            handleFetchWeather();
-        }
-    });
-}
-
 themeToggle.addEventListener('click', toggleTheme);
-
-async function handleFetchWeather() {
-    const city = cityInput?.value?.trim();
-    if (!city) {
-        addStatus('Wpisz nazwę miasta, np. Warszawa.');
-        return;
-    }
-    await fetchWeatherByCity(city);
-}
 
 async function handleFetchWeatherFromText(city, originalText) {
     const status = addStatus(`Sprawdzam pogodę dla ${city}...`);
@@ -290,17 +273,20 @@ async function handleFetchWeatherFromText(city, originalText) {
 }
 
 async function fetchWeatherByCity(city) {
-    let key = loadOpenWeatherKey();
+    const savedKey = localStorage.getItem(OPENWEATHER_KEY_NAME);
+    let key = savedKey || DEFAULT_OPENWEATHER_KEY;
+
     try {
         return await fetchWeather(city, key);
     } catch (err) {
         if (err.message.toLowerCase().includes('invalid api key')) {
-            const newKey = requestApiKeyRetry();
-            if (!newKey) {
-                throw new Error('Nie podano poprawnego klucza API. Spróbuj ponownie.');
+            if (savedKey && savedKey !== DEFAULT_OPENWEATHER_KEY) {
+                // Usuń nieprawidłowy zapisany klucz i spróbuj jeszcze raz z domyślnym.
+                localStorage.removeItem(OPENWEATHER_KEY_NAME);
+                key = DEFAULT_OPENWEATHER_KEY;
+                return await fetchWeather(city, key);
             }
-            key = newKey;
-            return await fetchWeather(city, key);
+            throw new Error('Nieprawidłowy klucz API. Sprawdź ustawienia klucza w kodzie.');
         }
         throw err;
     }
