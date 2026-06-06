@@ -6,6 +6,7 @@ const themeToggle = document.getElementById('theme-toggle');
 const STORAGE_KEY = 'weatherChatbotHistory';
 const THEME_KEY = 'weatherChatbotTheme';
 const OPENWEATHER_KEY_NAME = 'openWeatherApiKey';
+const DEFAULT_OPENWEATHER_KEY = 'abcfeea61d04caf2b69a2865402a1035';
 
 function saveOpenWeatherKey(key) {
     if (!key) return localStorage.removeItem(OPENWEATHER_KEY_NAME);
@@ -13,20 +14,44 @@ function saveOpenWeatherKey(key) {
 }
 
 function loadOpenWeatherKey() {
-    return localStorage.getItem(OPENWEATHER_KEY_NAME) || '';
+    return localStorage.getItem(OPENWEATHER_KEY_NAME) || DEFAULT_OPENWEATHER_KEY;
 }
 
 async function fetchWeather(city, key) {
     const encoded = encodeURIComponent(city.trim());
     const url = `https://api.openweathermap.org/data/2.5/weather?q=${encoded}&units=metric&lang=pl&appid=${key}`;
-    const res = await fetch(url);
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || `HTTP ${res.status}`);
-    }
-    return res.json();
+    return timeoutFetch(url, { method: 'GET' }, 15000);
 }
 
+async function timeoutFetch(resource, options = {}, timeout = 15000) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+        const response = await fetch(resource, { signal: controller.signal, ...options });
+        clearTimeout(id);
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.message || `HTTP ${response.status}`);
+        }
+        return response.json();
+    } catch (error) {
+        clearTimeout(id);
+        if (error.name === 'AbortError') {
+            throw new Error('Żądanie przekroczyło limit czasu. Sprawdź połączenie internetowe.');
+        }
+        throw error;
+    }
+}
+
+function requestApiKeyRetry() {
+    const defaultKey = loadOpenWeatherKey();
+    const newKey = window.prompt('OpenWeather: klucz API jest nieprawidłowy. Wprowadź poprawny klucz API:', defaultKey);
+    if (!newKey) return null;
+    const trimmed = newKey.trim();
+    if (!trimmed) return null;
+    saveOpenWeatherKey(trimmed);
+    return trimmed;
+}
 
 function addMessage(text, sender) {
     const message = document.createElement('div');
@@ -196,6 +221,8 @@ function sendMessage() {
     }, 700);
 }
 
+const cityInput = document.getElementById('city-input');
+
 sendButton.addEventListener('click', sendMessage);
 userInput.addEventListener('keydown', event => {
     if (event.key === 'Enter') {
@@ -204,14 +231,16 @@ userInput.addEventListener('keydown', event => {
     }
 });
 
-themeToggle.addEventListener('click', toggleTheme);
+if (cityInput) {
+    cityInput.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            handleFetchWeather();
+        }
+    });
+}
 
-// OpenWeather UI elements and handlers
-const cityInput = document.getElementById('city-input');
-const apiKeyInput = document.getElementById('api-key');
-const fetchWeatherButton = document.getElementById('fetch-weather-button');
-const saveKeyButton = document.getElementById('save-key-button');
-const clearKeyButton = document.getElementById('clear-key-button');
+themeToggle.addEventListener('click', toggleTheme);
 
 async function handleFetchWeather() {
     const city = cityInput?.value?.trim();
@@ -220,48 +249,48 @@ async function handleFetchWeather() {
         return;
     }
 
-    const key = (apiKeyInput && apiKeyInput.value.trim()) || loadOpenWeatherKey();
-    if (!key) {
-        addStatus('Brakuje klucza OpenWeather API. Wpisz go i kliknij "Zapisz klucz".');
-        return;
-    }
-
+    let key = loadOpenWeatherKey();
     const status = addStatus(`Pobieram pogodę dla ${city}...`);
+    let data;
 
     try {
-        const data = await fetchWeather(city, key);
-        status.remove();
-        const temp = Math.round(data.main.temp);
-        const desc = data.weather && data.weather[0] && data.weather[0].description ? data.weather[0].description : '';
-        addStatus(`Pobrano: ${temp}°C, ${desc}`);
-
-        const text = `Jest ${temp} stopni i ${desc}`;
-        const response = botResponse(text);
-        addMessage(response, 'bot-message');
-        saveHistory();
+        data = await fetchWeather(city, key);
     } catch (err) {
-        status.remove();
-        addStatus('Błąd pobierania pogody: ' + err.message);
+        if (err.message.toLowerCase().includes('invalid api key')) {
+            const newKey = requestApiKeyRetry();
+            if (!newKey) {
+                status.remove();
+                addStatus('Nie podano poprawnego klucza API. Spróbuj ponownie.');
+                return;
+            }
+            key = newKey;
+            try {
+                data = await fetchWeather(city, key);
+            } catch (retryErr) {
+                status.remove();
+                addStatus('Błąd pobierania pogody: ' + retryErr.message);
+                return;
+            }
+        } else {
+            status.remove();
+            addStatus('Błąd pobierania pogody: ' + err.message);
+            return;
+        }
     }
-}
 
-if (fetchWeatherButton) fetchWeatherButton.addEventListener('click', handleFetchWeather);
-if (saveKeyButton) saveKeyButton.addEventListener('click', () => {
-    const key = apiKeyInput?.value?.trim();
-    if (!key) { addStatus('Wpisz klucz, aby go zapisać.'); return; }
-    saveOpenWeatherKey(key);
-    addStatus('Zapisano klucz API lokalnie.');
-});
-if (clearKeyButton) clearKeyButton.addEventListener('click', () => {
-    saveOpenWeatherKey('');
-    if (apiKeyInput) apiKeyInput.value = '';
-    addStatus('Usunięto klucz API.');
-});
+    status.remove();
+    const temp = Math.round(data.main.temp);
+    const desc = data.weather && data.weather[0] && data.weather[0].description ? data.weather[0].description : '';
+    addStatus(`Pobrano: ${temp}°C, ${desc}`);
+
+    const text = `Jest ${temp} stopni i ${desc}`;
+    const response = botResponse(text);
+    addMessage(response, 'bot-message');
+    saveHistory();
+}
 
 window.addEventListener('load', () => {
     loadTheme();
     restoreHistory();
-    // populate saved API key
-    if (apiKeyInput) apiKeyInput.value = loadOpenWeatherKey();
     userInput.focus();
 });
