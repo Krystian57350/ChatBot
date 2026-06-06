@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weather AI Assistant</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main class="page-shell">
+        <section class="hero">
+            <div class="hero-copy">
+                <span class="eyebrow">Inteligentny Agent AI</span>
+                <h1>Chatbot pogodowy</h1>
+                <p>Otrzymaj szybkie rekomendacje ubioru na podstawie pogody i nastroju. Wpisz temperaturę, warunki lub miasto.</p>
+            </div>
+            <button id="theme-toggle" type="button" aria-label="Włącz tryb ciemny">Dark mode</button>
+        </section>
+
+        <section class="chat-container" aria-label="Pogodowy chatbot">
+            <header class="chat-header">
+                <div>
+                    <span class="chat-title">Weather AI Assistant</span>
+                    <span class="chat-subtitle">Twoje wsparcie w wyborze stroju</span>
+                </div>
+            </header>
+
+            <div id="chat-box" class="chat-box" aria-live="polite" aria-relevant="additions"></div>
+
+            <div class="weather-controls" aria-label="Pobierz pogodę z OpenWeather">
+                <input type="text" id="city-input" placeholder="Miasto (np. Warszawa)">
+                <input type="text" id="api-key" placeholder="OpenWeather API Key (opcjonalnie)">
+                <div class="weather-actions">
+                    <button id="save-key-button" type="button">Zapisz klucz</button>
+                    <button id="fetch-weather-button" type="button">Pobierz pogodę</button>
+                    <button id="clear-key-button" type="button">Wyczyść klucz</button>
+                </div>
+            </div>
+
+            <div class="chat-input">
+                <label for="user-input" class="sr-only">Wprowadź wiadomość</label>
+                <input type="text" id="user-input" placeholder="Napisz np. Jest 7 stopni i pada deszcz" autocomplete="off">
+                <button id="send-button" type="button">Wyślij</button>
+            </div>
+        </section>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
