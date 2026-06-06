@@ -88,6 +88,58 @@ function extractCityFromText(text) {
     return null;
 }
 
+function normalizeCityName(rawCity) {
+    const mapping = {
+        warszawie: 'Warszawa',
+        warszawą: 'Warszawa',
+        krakowie: 'Kraków',
+        krakowie: 'Kraków',
+        poznaniu: 'Poznań',
+        poznań: 'Poznań',
+        wrocławiu: 'Wrocław',
+        gdyni: 'Gdynia',
+        gdańsku: 'Gdańsk',
+        szczecinie: 'Szczecin',
+        katowicach: 'Katowice',
+        lublinie: 'Lublin',
+        toruniu: 'Toruń',
+        grudziądzu: 'Grudziądz',
+        olsztynie: 'Olsztyn',
+        białymstoku: 'Białystok',
+        łodzi: 'Łódź'
+    };
+    const trimmed = rawCity.trim();
+    const sanitized = trimmed.replace(/\s+/g, ' ');
+    const lower = sanitized.toLowerCase();
+    if (mapping[lower]) {
+        return mapping[lower];
+    }
+    if (lower.endsWith('ie')) {
+        return sanitized.slice(0, -2) + 'a';
+    }
+    if (lower.endsWith('u')) {
+        return sanitized.slice(0, -1);
+    }
+    if (lower.endsWith('i')) {
+        return sanitized + 'a';
+    }
+    return sanitized;
+}
+
+async function resolveCityByGeo(city, key) {
+    const encoded = encodeURIComponent(city.trim());
+    const url = `https://api.openweathermap.org/geo/1.0/direct?q=${encoded}&limit=1&appid=${key}`;
+    const result = await timeoutFetch(url, { method: 'GET' }, 15000);
+    if (Array.isArray(result) && result.length > 0 && result[0].name) {
+        return result[0].name;
+    }
+    return null;
+}
+
+function isRainQuestion(text) {
+    return containsKeyword(text, ['czy będzie deszcz', 'czy będzie padać', 'czy będzie padać', 'czy będzie pada', 'czy będzie deszcz', 'deszcz', 'padać', 'pada']);
+}
+
 function buildRecommendation(temp, conditions, styles) {
     const pieces = [];
 
@@ -261,8 +313,21 @@ async function handleFetchWeatherFromText(city, originalText) {
     try {
         const data = await fetchWeatherByCity(city);
         status.remove();
-        addStatus(`Pobrano: ${Math.round(data.main.temp)}°C, ${data.weather[0].description}`);
-        const text = `Jest ${Math.round(data.main.temp)} stopni i ${data.weather[0].description}`;
+        const currentDescription = data.weather[0].description;
+        addStatus(`Pobrano: ${Math.round(data.main.temp)}°C, ${currentDescription}`);
+
+        const lowerText = originalText.toLowerCase();
+        if (isRainQuestion(lowerText) && containsKeyword(lowerText, ['deszcz', 'pada', 'padać'])) {
+            const rainingNow = data.weather.some(item => item.main.toLowerCase().includes('rain') || item.description.toLowerCase().includes('deszcz'));
+            const answer = rainingNow
+                ? 'Tak, teraz pada deszcz. Weź parasol.'
+                : 'Nie, teraz nie pada. Sprawdź prognozę jutro, może się zmienić.';
+            addMessage(answer, 'bot-message');
+            saveHistory();
+            return;
+        }
+
+        const text = `Jest ${Math.round(data.main.temp)} stopni i ${currentDescription}`;
         const response = botResponse(text);
         addMessage(response, 'bot-message');
         saveHistory();
@@ -275,19 +340,29 @@ async function handleFetchWeatherFromText(city, originalText) {
 async function fetchWeatherByCity(city) {
     const savedKey = localStorage.getItem(OPENWEATHER_KEY_NAME);
     let key = savedKey || DEFAULT_OPENWEATHER_KEY;
+    const normalizedCity = normalizeCityName(city);
 
     try {
-        return await fetchWeather(city, key);
+        return await fetchWeather(normalizedCity, key);
     } catch (err) {
-        if (err.message.toLowerCase().includes('invalid api key')) {
+        const message = err.message.toLowerCase();
+        if (message.includes('invalid api key')) {
             if (savedKey && savedKey !== DEFAULT_OPENWEATHER_KEY) {
-                // Usuń nieprawidłowy zapisany klucz i spróbuj jeszcze raz z domyślnym.
                 localStorage.removeItem(OPENWEATHER_KEY_NAME);
                 key = DEFAULT_OPENWEATHER_KEY;
-                return await fetchWeather(city, key);
+                return await fetchWeather(normalizedCity, key);
             }
             throw new Error('Nieprawidłowy klucz API. Sprawdź ustawienia klucza w kodzie.');
         }
+
+        if (message.includes('city not found')) {
+            const geoCity = await resolveCityByGeo(city, key);
+            if (geoCity) {
+                return await fetchWeather(geoCity, key);
+            }
+            throw new Error('Nie znaleziono miasta. Spróbuj wpisać nazwę miasta w formie podstawowej, np. Warszawa.');
+        }
+
         throw err;
     }
 }
